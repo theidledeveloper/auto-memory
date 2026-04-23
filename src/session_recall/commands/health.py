@@ -1,13 +1,12 @@
-"""Health check orchestrator — run all 9 dimensions and report."""
-import sys
+"""Health check orchestrator — run all 10 dimensions and report."""
 from ..health.scoring import overall_score
 from ..health import (dim_freshness, dim_schema, dim_latency, dim_corpus,
-                      dim_summary_coverage, dim_repo_coverage, dim_concurrency,
+                      dim_summary_coverage, dim_repo_coverage, dim_file_freshness, dim_concurrency,
                       dim_e2e, dim_disclosure)
 from ..util.format_output import fmt_json
 
 DIMS = [dim_freshness, dim_schema, dim_latency, dim_corpus,
-        dim_summary_coverage, dim_repo_coverage, dim_concurrency, dim_e2e,
+        dim_summary_coverage, dim_repo_coverage, dim_file_freshness, dim_concurrency, dim_e2e,
         dim_disclosure]
 
 ZONE_ICON = {"GREEN": "🟢", "AMBER": "🟡", "RED": "🔴"}
@@ -31,7 +30,7 @@ def run(args) -> int:
         print("-" * 70)
         print(f"    {'Overall':<22s}        {score:5.1f}")
         if hints:
-            print(f"\n💡 Hints:")
+            print("\n💡 Hints:")
             for h in hints[:3]:
                 print(f"   • {h}")
         print()

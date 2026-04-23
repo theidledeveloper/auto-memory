@@ -3,10 +3,12 @@ import sqlite3
 import tempfile
 import os
 import json
-import pytest
-from unittest.mock import patch
 from io import StringIO
+import pytest
 from types import SimpleNamespace
+from unittest.mock import patch
+
+from session_recall.util.resolve_scope import Scope
 
 
 def _create_db_with_aged_data() -> str:
@@ -64,8 +66,10 @@ def db_path():
 
 def _run_cmd(module_path, run_fn, args, db_path):
     """Helper to invoke a command's run() function with patched DB."""
+    scope = Scope("all", "all", "all") if getattr(args, "repo", None) == "all" \
+        else Scope("repo", "owner/repo", "owner/repo")
     with patch(f"{module_path}.DB_PATH", db_path), \
-         patch(f"{module_path}.detect_repo", return_value="owner/repo"):
+         patch(f"{module_path}.resolve_scope", return_value=scope):
         buf = StringIO()
         with patch("sys.stdout", buf):
             code = run_fn(args)
@@ -200,13 +204,38 @@ def test_search_days_with_repo_filter(db_path):
 
 # -------- EDGE CASES --------
 
-def test_list_days_zero_excludes_everything(db_path):
-    """days=0 should return nothing (datetime('now', '-0 days') == now)."""
+def test_list_days_zero_filters_to_today(db_path):
+    """days=0 should mean today's records, not fallback to another mode."""
     from session_recall.commands.list_sessions import run
     args = SimpleNamespace(repo=None, limit=100, days=0, json=True)
     code, out = _run_cmd("session_recall.commands.list_sessions", run, args, db_path)
-    # days=0 falsy → default 30 applied (expected: returns 3, excludes 60d)
-    assert out["count"] == 3
+    assert code == 0
+    assert out["count"] == 1
+    assert out["sessions"][0]["id_full"] == "s_now"
+
+
+def test_files_days_zero_filters_to_today(db_path):
+    from session_recall.commands.files import run
+    args = SimpleNamespace(repo=None, limit=100, days=0, json=True)
+    code, out = _run_cmd("session_recall.commands.files", run, args, db_path)
+    assert code == 0
+    assert out["count"] == 1
+
+
+def test_checkpoints_days_zero_filters_to_today(db_path):
+    from session_recall.commands.checkpoints import run
+    args = SimpleNamespace(repo=None, limit=100, days=0, json=True)
+    code, out = _run_cmd("session_recall.commands.checkpoints", run, args, db_path)
+    assert code == 0
+    assert out["count"] == 1
+
+
+def test_search_days_zero_filters_to_today(db_path):
+    from session_recall.commands.search import run
+    args = SimpleNamespace(query="mcp", repo=None, limit=100, days=0, json=True)
+    code, out = _run_cmd("session_recall.commands.search", run, args, db_path)
+    assert code == 0
+    assert out["count"] == 1
 
 
 def test_search_empty_query_with_days(db_path):
@@ -223,3 +252,17 @@ def test_list_days_large_number(db_path):
     args = SimpleNamespace(repo=None, limit=100, days=3650, json=True)
     code, out = _run_cmd("session_recall.commands.list_sessions", run, args, db_path)
     assert out["count"] == 4
+
+
+def test_repo_coverage_health_uses_unaliased_columns(db_path):
+    from session_recall.health.dim_repo_coverage import check
+
+    with patch("session_recall.health.dim_repo_coverage.DB_PATH", db_path), \
+         patch(
+             "session_recall.health.dim_repo_coverage.resolve_scope",
+             return_value=Scope("repo", "owner/repo", "owner/repo"),
+         ):
+        out = check()
+
+    assert out["zone"] == "GREEN"
+    assert "sessions for owner/repo" in out["detail"]

@@ -8,11 +8,21 @@ EXPECTED_SCHEMA: dict[str, set[str]] = {
     "checkpoints": {"session_id", "checkpoint_number", "title", "overview", "created_at"},
 }
 
+PATH_SCOPE_SCHEMA: dict[str, set[str]] = {"sessions": {"cwd"}}
+FILE_FALLBACK_SCHEMA: dict[str, set[str]] = {"checkpoints": {"important_files"}}
+FEATURE_SUPPORT_SCHEMA: dict[str, set[str]] = {
+    "sessions": {"cwd"},
+    "checkpoints": {"important_files"},
+}
 
-def schema_check(conn) -> list[str]:
+
+def schema_check(conn, extra_expected: dict[str, set[str]] | None = None) -> list[str]:
     """Validate DB schema. Returns list of problems (empty = OK)."""
     problems: list[str] = []
-    for table, expected_cols in EXPECTED_SCHEMA.items():
+    merged_schema = {table: set(cols) for table, cols in EXPECTED_SCHEMA.items()}
+    for table, cols in (extra_expected or {}).items():
+        merged_schema.setdefault(table, set()).update(cols)
+    for table, expected_cols in merged_schema.items():
         rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
         if not rows:
             problems.append(f"MISSING TABLE: {table}")

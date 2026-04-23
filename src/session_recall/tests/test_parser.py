@@ -9,7 +9,13 @@ def test_tier_map_covers_all_subcommands():
     assert not missing, f"Subcommands missing from TIER_MAP: {missing}"
 
 
-def test_help_text_says_9_dimensions():
+def test_help_text_says_10_dimensions():
     """Regression guard against stale docstring."""
     from session_recall.commands import health
-    assert "9 dimension" in health.__doc__.lower() or "9-dimension" in health.__doc__.lower()
+    assert "10 dimension" in health.__doc__.lower() or "10-dimension" in health.__doc__.lower()
+
+
+def test_health_includes_file_freshness_dimension():
+    from session_recall.commands.health import DIMS
+
+    assert any(dim.__name__.endswith("dim_file_freshness") for dim in DIMS)

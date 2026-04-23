@@ -184,6 +184,8 @@ session-recall files --json --limit 10
 session-recall list --json --limit 5
 ```
 
+`session-recall files` falls back to checkpoint-derived file hints when `session_files` is stale or missing, and marks fallback results with source metadata and warning text.
+
 **Tier 2 — Focused recall (~200 tokens).** When Tier 1 isn't enough.
 
 ```bash
@@ -199,8 +201,8 @@ session-recall show <session-id> --json
 **Operational commands:**
 
 ```bash
-session-recall health          # 9-dimension health dashboard
-session-recall schema-check    # validate DB schema after Copilot CLI upgrades
+session-recall health          # 10-dimension health dashboard
+session-recall schema-check    # validate feature-support schema after Copilot CLI upgrades
 ```
 
 ## Health Check
@@ -214,10 +216,13 @@ Dim Name                   Zone     Score  Detail
  4  Corpus Size            🟢 GREEN  10.0  399 sessions
  5  Summary Coverage       🟢 GREEN   7.4  92% (367/399)
  6  Repo Coverage          🟢 GREEN  10.0  8 sessions for owner/repo
- 7  Concurrency            🟢 GREEN  10.0  busy=0.0%, p95=48ms
- 8  E2E Probe              🟢 GREEN  10.0  list→show OK
- 9  Progressive Disclosure  ⚪ CALIBRATING  —  Collecting baseline (n=42/200)
+ 7  File Row Freshness     🔴 RED     0.6  session_files lag recent activity
+ 8  Concurrency            🟢 GREEN  10.0  busy=0.0%, p95=48ms
+ 9  E2E Probe              🟢 GREEN  10.0  list→show OK
+10  Progressive Disclosure  ⚪ CALIBRATING  —  Collecting baseline (n=42/200)
 ```
+
+`File Row Freshness` can legitimately go RED on real data when `session_files` lags recent activity. Treat that as a signal to investigate freshness, not automatically as a bug.
 
 ## Agent Integration
 
@@ -239,7 +244,7 @@ See [`UPGRADE-COPILOT-CLI.md`](UPGRADE-COPILOT-CLI.md) for schema validation aft
 No. auto-memory is strictly read-only. It never writes to `~/.copilot/session-store.db`.
 
 **What happens when Copilot CLI updates its schema?**
-Run `session-recall schema-check` to validate. The tool fails fast on schema drift rather than returning bad data. See [UPGRADE-COPILOT-CLI.md](UPGRADE-COPILOT-CLI.md).
+Run `session-recall schema-check` to validate the feature-support schema. The tool fails fast on schema drift rather than returning bad data. See [UPGRADE-COPILOT-CLI.md](UPGRADE-COPILOT-CLI.md).
 
 ## Roadmap
 

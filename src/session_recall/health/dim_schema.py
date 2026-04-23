@@ -1,6 +1,6 @@
 """Dim 2: Schema integrity — expected tables and columns present."""
 from ..db.connect import connect_ro
-from ..db.schema_check import schema_check
+from ..db.schema_check import FEATURE_SUPPORT_SCHEMA, schema_check
 from ..config import DB_PATH
 
 HINT = "Run `session-recall schema-check` for details"
@@ -9,7 +9,7 @@ HINT = "Run `session-recall schema-check` for details"
 def check() -> dict:
     try:
         conn = connect_ro(DB_PATH)
-        problems = schema_check(conn)
+        problems = schema_check(conn, FEATURE_SUPPORT_SCHEMA)
         conn.close()
     except SystemExit:
         return {"name": "Schema Integrity", "score": 0, "zone": "RED",

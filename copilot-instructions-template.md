@@ -19,7 +19,7 @@ session-recall search '<term>' --json   # full-text search
 session-recall search '<term>' --days 5 # search last 5 days only
 session-recall checkpoints --days 3     # checkpoints from last 3 days
 session-recall show <id> --json         # drill into one session
-session-recall health --json            # 8-dimension health check
+session-recall health --json            # 10-dimension health check
 session-recall schema-check             # validate DB schema (run after Copilot CLI upgrade)
 ```
 

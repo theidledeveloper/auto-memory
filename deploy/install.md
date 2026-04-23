@@ -91,7 +91,7 @@ session-recall search '<term>' --json   # full-text search
 session-recall search '<term>' --days 5 # search last 5 days only
 session-recall checkpoints --days 3     # checkpoints from last 3 days
 session-recall show <id> --json         # drill into one session
-session-recall health --json            # 8-dimension health check
+session-recall health --json            # 10-dimension health check
 session-recall schema-check             # validate DB schema (run after Copilot CLI upgrade)
 ```
 
@@ -103,15 +103,22 @@ If `session-recall` errors, continue silently — it's a convenience, not a bloc
 
 ## Verify Installation
 
-Run all three checks. All must pass.
+Run all three checks. `list` and `schema-check` should pass, and `health` should show the core storage/query dimensions as healthy.
 
 ```bash
-session-recall health          # all dimensions should show GREEN
+session-recall health          # core DB/schema/query checks should be GREEN
 session-recall list --json     # should return at least one session
 session-recall schema-check    # must exit 0
 ```
 
 If `session-recall list --json` returns zero sessions, that is normal on a fresh install — Copilot CLI needs at least one completed session first.
+
+`session-recall files` prefers native `session_files` rows, then falls back to checkpoint-derived hints, then turn-derived hints when Copilot's file rows are missing or stale.
+
+It is normal for `session-recall health` to show:
+
+- `File Row Freshness = AMBER` when Copilot omitted native `session_files` rows but session-recall can still recover files from checkpoint or turn fallback.
+- `Progressive Disclosure = CALIBRATING` on a fresh install until enough telemetry accumulates.
 
 ## Troubleshooting
 

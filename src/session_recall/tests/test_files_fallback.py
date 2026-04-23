@@ -54,6 +54,45 @@ def _create_fallback_db() -> str:
     return path
 
 
+def _create_turn_only_db() -> str:
+    f = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    path = f.name
+    f.close()
+    conn = sqlite3.connect(path)
+    conn.execute("""CREATE TABLE sessions (
+        id TEXT PRIMARY KEY, cwd TEXT, repository TEXT, branch TEXT,
+        summary TEXT, created_at TEXT, updated_at TEXT, host_type TEXT)""")
+    conn.execute("""CREATE TABLE turns (
+        id INTEGER PRIMARY KEY, session_id TEXT, turn_index INTEGER,
+        user_message TEXT, assistant_response TEXT, timestamp TEXT)""")
+    conn.execute("""CREATE TABLE session_files (
+        id INTEGER PRIMARY KEY, session_id TEXT, file_path TEXT,
+        tool_name TEXT, turn_index INTEGER, first_seen_at TEXT)""")
+    conn.execute("""CREATE TABLE session_refs (
+        id INTEGER PRIMARY KEY, session_id TEXT, ref_type TEXT,
+        ref_value TEXT, turn_index INTEGER, created_at TEXT)""")
+    conn.execute("""CREATE TABLE checkpoints (
+        id INTEGER PRIMARY KEY, session_id TEXT, checkpoint_number INTEGER,
+        title TEXT, overview TEXT, history TEXT, work_done TEXT,
+        technical_details TEXT, next_steps TEXT, created_at TEXT)""")
+    conn.execute(
+        "INSERT INTO sessions VALUES ('s_turn', '/workspace/project', 'owner/repo', 'main', 'Turn-only session', datetime('now'), datetime('now'), 'local')"
+    )
+    conn.execute(
+        """INSERT INTO turns VALUES (
+            1,
+            's_turn',
+            0,
+            'update docs plus inspect .gstack/benchmark-reports/baselines/baseline.json',
+            'Touched `README.md` and `.github/skills/rubber-duck-claude/SKILL.md`.',
+            datetime('now')
+        )"""
+    )
+    conn.commit()
+    conn.close()
+    return path
+
+
 def test_parse_important_files_extracts_conservative_paths():
     text = """- `/workspace/project/new.py`
 - Core spec and source of truth
@@ -88,6 +127,25 @@ def test_parse_important_files_rejects_version_like_bullets():
 - package.json
 """
     assert parse_important_files(text) == ["package.json"]
+
+
+def test_parse_important_files_rejects_shell_commands_and_templates():
+    text = """- `git add CLAUDE.md && git commit -m "chore: add rules"`
+- $GSTACK_ROOT/[skill-name]/SKILL.md
+- .gstack/benchmark-reports/{date}-benchmark.md
+- README.md
+"""
+    assert parse_important_files(text) == ["README.md"]
+
+
+def test_parse_important_files_rejects_single_segment_dotted_prose():
+    text = """- high-level.summary
+- work-in-progress.feature
+- error.log
+- README.md
+- package.json
+"""
+    assert parse_important_files(text) == ["README.md", "package.json"]
 
 
 def test_files_uses_checkpoint_fallback_when_rows_are_stale():
@@ -217,5 +275,32 @@ def test_files_uses_turn_timestamp_to_trigger_fallback_when_rows_are_stale():
             assert out["source"] == "checkpoint_fallback"
             assert out["warning"].startswith("session_files rows lag latest activity")
             assert out["files"][0]["file_path"] == "/workspace/project/new.py"
+    finally:
+        os.unlink(path)
+
+
+def test_files_uses_turn_fallback_when_rows_and_checkpoints_are_missing():
+    path = _create_turn_only_db()
+    try:
+        with patch("session_recall.commands.files.DB_PATH", path), \
+             patch(
+                 "session_recall.commands.files.resolve_scope",
+                 return_value=Scope("repo", "owner/repo", "owner/repo"),
+             ):
+            from session_recall.commands.files import run
+
+            args = SimpleNamespace(repo=None, limit=10, days=7, json=True)
+            buf = StringIO()
+            with patch("sys.stdout", buf):
+                code = run(args)
+            out = json.loads(buf.getvalue())
+            assert code == 0
+            assert out["source"] == "turn_fallback"
+            assert out["warning"] == "No session_files rows in scope, using turn fallback"
+            assert [f["file_path"] for f in out["files"]] == [
+                "README.md",
+                ".github/skills/rubber-duck-claude/SKILL.md",
+            ]
+            assert all(f["source"] == "turn_fallback" for f in out["files"])
     finally:
         os.unlink(path)

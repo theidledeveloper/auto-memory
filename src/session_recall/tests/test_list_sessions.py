@@ -46,6 +46,44 @@ def _create_test_db() -> str:
     return path
 
 
+def _create_turn_only_db() -> str:
+    f = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    path = f.name
+    f.close()
+    conn = sqlite3.connect(path)
+    conn.execute("""CREATE TABLE sessions (
+        id TEXT PRIMARY KEY, cwd TEXT, repository TEXT, branch TEXT,
+        summary TEXT, created_at TEXT, updated_at TEXT, host_type TEXT)""")
+    conn.execute("""CREATE TABLE turns (
+        id INTEGER PRIMARY KEY, session_id TEXT, turn_index INTEGER,
+        user_message TEXT, assistant_response TEXT, timestamp TEXT)""")
+    conn.execute("""CREATE TABLE session_files (
+        id INTEGER PRIMARY KEY, session_id TEXT, file_path TEXT,
+        tool_name TEXT, turn_index INTEGER, first_seen_at TEXT)""")
+    conn.execute("""CREATE TABLE session_refs (
+        id INTEGER PRIMARY KEY, session_id TEXT, ref_type TEXT,
+        ref_value TEXT, turn_index INTEGER, created_at TEXT)""")
+    conn.execute("""CREATE TABLE checkpoints (
+        id INTEGER PRIMARY KEY, session_id TEXT, checkpoint_number INTEGER,
+        title TEXT, overview TEXT, created_at TEXT)""")
+    conn.execute(
+        "INSERT INTO sessions VALUES ('s1', '/workspace/project', 'owner/repo', 'main', 'Turn fallback session', datetime('now'), datetime('now'), 'local')"
+    )
+    conn.execute(
+        """INSERT INTO turns VALUES (
+            1,
+            's1',
+            0,
+            'Please update docs',
+            'Touched `README.md` and `.github/skills/rubber-duck-gpt/SKILL.md`.',
+            datetime('now')
+        )"""
+    )
+    conn.commit()
+    conn.close()
+    return path
+
+
 def test_list_filters_by_repo():
     """List should only return sessions for the specified repo."""
     path = _create_test_db()
@@ -178,6 +216,31 @@ def test_list_recent_files_respect_days_window():
             assert [f["full_path"] for f in output["recent_files"]] == [
                 "/workspace/project/app.py"
             ]
+    finally:
+        os.unlink(path)
+
+
+def test_list_recent_files_use_turn_fallback_when_session_files_are_missing():
+    path = _create_turn_only_db()
+    try:
+        with patch("session_recall.commands.list_sessions.DB_PATH", path), \
+             patch(
+                 "session_recall.commands.list_sessions.resolve_scope",
+                 return_value=Scope("repo", "owner/repo", "owner/repo"),
+             ):
+            from session_recall.commands.list_sessions import run
+
+            args = SimpleNamespace(repo=None, limit=10, days=30, json=True)
+            buf = StringIO()
+            with patch("sys.stdout", buf):
+                code = run(args)
+            output = json.loads(buf.getvalue())
+            assert code == 0
+            assert [f["full_path"] for f in output["recent_files"]] == [
+                "README.md",
+                ".github/skills/rubber-duck-gpt/SKILL.md",
+            ]
+            assert all(f["source"] == "turn_fallback" for f in output["recent_files"])
     finally:
         os.unlink(path)
 

@@ -4,7 +4,9 @@ import sys
 
 from ..config import DB_PATH
 from ..db.connect import connect_ro
-from ..db.schema_check import PATH_SCOPE_SCHEMA, schema_check
+from ..db.schema_check import FILE_FALLBACK_SCHEMA, PATH_SCOPE_SCHEMA, schema_check
+from ..util.file_activity import latest_activity_timestamp, latest_file_timestamp
+from ..util.file_hints import load_checkpoint_file_hints, load_turn_file_hints
 from ..util.format_output import output
 from ..util.resolve_scope import (
     file_scope_sql,
@@ -18,6 +20,7 @@ _QUERY_BASE = """
            (SELECT COUNT(*) FROM turns t WHERE t.session_id = s.id) as turns_count,
            (SELECT COUNT(*) FROM session_files f WHERE f.session_id = s.id) as files_count
     FROM sessions s"""
+_STALE_HOURS = 24
 
 
 def run(args) -> int:
@@ -71,6 +74,18 @@ FROM session_files sf JOIN sessions s ON s.id = sf.session_id
 ORDER BY sf.first_seen_at DESC LIMIT ?"""
 
 
+def _format_recent_file(row: dict, cwd: str) -> dict:
+    path = row["file_path"]
+    return {
+        "file_path": os.path.relpath(path, cwd) if os.path.isabs(path) and path.startswith(cwd) else path,
+        "full_path": path,
+        "tool_name": row["tool_name"],
+        "date": row["date"],
+        "session_id": row["session_id"],
+        "source": row.get("source", "session_files"),
+    }
+
+
 def _recent_files(conn, scope, days=None, limit=10):
     conditions = []
     params = []
@@ -86,9 +101,25 @@ def _recent_files(conn, scope, days=None, limit=10):
     sql = _FILES_SQL.format(where_clause=where_clause)
     rows = conn.execute(sql, (*params, limit)).fetchall()
     cwd = os.getcwd()
-    return [{"file_path": os.path.relpath(r["file_path"], cwd)
-                          if r["file_path"].startswith(cwd) else r["file_path"],
-             "full_path": r["file_path"],
-             "tool_name": r["tool_name"],
-             "date": (r["first_seen_at"] or "")[:10],
-             "session_id": r["session_id"][:8]} for r in rows]
+    primary_files = [{
+        "file_path": r["file_path"],
+        "tool_name": r["tool_name"],
+        "source": "session_files",
+        "date": (r["first_seen_at"] or "")[:10],
+        "session_id": r["session_id"][:8],
+    } for r in rows]
+    checkpoint_fallback_supported = not schema_check(conn, FILE_FALLBACK_SCHEMA)
+    checkpoint_files = (
+        load_checkpoint_file_hints(conn, scope, days, limit)
+        if checkpoint_fallback_supported
+        else []
+    )
+    turn_files = load_turn_file_hints(conn, scope, days, limit)
+    fallback_files = checkpoint_files or turn_files
+    latest_file = latest_file_timestamp(conn, scope)
+    latest_activity = latest_activity_timestamp(conn, scope)
+    file_rows_stale = latest_activity is not None and (
+        latest_file is None or (latest_activity - latest_file).total_seconds() / 3600 > _STALE_HOURS
+    )
+    selected = fallback_files if fallback_files and (not primary_files or file_rows_stale) else primary_files
+    return [_format_recent_file(row, cwd) for row in selected]

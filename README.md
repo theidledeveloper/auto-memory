@@ -184,7 +184,7 @@ session-recall files --json --limit 10
 session-recall list --json --limit 5
 ```
 
-`session-recall files` falls back to checkpoint-derived file hints when `session_files` is stale or missing, and marks fallback results with source metadata and warning text.
+`session-recall files` falls back to checkpoint-derived file hints and then turn-derived file hints when `session_files` is stale or missing, and marks fallback results with source metadata and warning text.
 
 **Tier 2 — Focused recall (~200 tokens).** When Tier 1 isn't enough.
 
@@ -222,7 +222,9 @@ Dim Name                   Zone     Score  Detail
 10  Progressive Disclosure  ⚪ CALIBRATING  —  Collecting baseline (n=42/200)
 ```
 
-`File Row Freshness` can legitimately go RED on real data when `session_files` lags recent activity. Treat that as a signal to investigate freshness, not automatically as a bug.
+`File Row Freshness` can legitimately degrade on real data when `session_files` lags recent activity. When fallback hints from checkpoints or turns are fresher than file rows, the dimension reports that degraded-but-recoverable state instead of a hard failure.
+
+`Progressive Disclosure` starting in `CALIBRATING` is also normal on a fresh install. That score only activates after enough telemetry accumulates.
 
 ## Agent Integration
 

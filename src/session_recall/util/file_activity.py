@@ -1,7 +1,7 @@
 """Shared helpers for file-row freshness and fallback activity checks."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from .resolve_scope import file_scope_sql, session_scope_sql
 
@@ -9,7 +9,10 @@ from .resolve_scope import file_scope_sql, session_scope_sql
 def parse_timestamp(value: str | None) -> datetime | None:
     if not value:
         return None
-    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is not None:
+        return parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return parsed
 
 
 def format_gap(hours: float) -> str:

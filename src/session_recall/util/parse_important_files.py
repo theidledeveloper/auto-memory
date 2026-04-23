@@ -1,4 +1,4 @@
-"""Parse conservative file-path hints from checkpoint important_files text."""
+"""Parse conservative file-path hints from checkpoint or turn text."""
 from __future__ import annotations
 
 import os
@@ -40,6 +40,13 @@ _KNOWN_DOTFILES = {
     ".dockerignore",
     ".terraform.lock.hcl",
 }
+_COMMON_SINGLE_SEGMENT_EXTENSIONS = {
+    "c", "cc", "cpp", "cs", "css", "csv", "go", "h", "hpp", "html", "ini",
+    "java", "js", "json", "jsx", "kt", "lock", "lua", "m", "md", "php", "plist",
+    "proto", "py", "rb", "rs", "scss", "sh", "sql", "svg", "swift", "toml",
+    "ts", "tsx", "txt", "vue", "xml", "yaml", "yml",
+}
+_DISALLOWED_HINT_TOKENS = ("&&", "||", ">>", "<<", "|", ">", "<", '"', "'", "$", "{", "}", "[", "]")
 
 
 def _clean_candidate(candidate: str) -> str:
@@ -49,6 +56,8 @@ def _clean_candidate(candidate: str) -> str:
 def _looks_like_path(candidate: str, *, allow_spaces: bool) -> bool:
     if not candidate or candidate.startswith(("http://", "https://")):
         return False
+    if any(token in candidate for token in _DISALLOWED_HINT_TOKENS):
+        return False
     if not allow_spaces and any(ch.isspace() for ch in candidate):
         return False
     if candidate.startswith(("~/.copilot/session-state/", "/Users/")) and "/.copilot/session-state/" in candidate:
@@ -56,18 +65,21 @@ def _looks_like_path(candidate: str, *, allow_spaces: bool) -> bool:
     leaf = os.path.basename(candidate.rstrip("/"))
     if not leaf:
         return False
+    has_path_separator = "/" in candidate or os.sep in candidate
     if leaf in _KNOWN_FILE_NAMES:
         return True
     if leaf.startswith("."):
         return leaf in _KNOWN_DOTFILES
     if "." in leaf and leaf not in {".", ".."}:
         _, _, ext = leaf.rpartition(".")
-        return any(ch.isalpha() for ch in ext)
+        if not any(ch.isalpha() for ch in ext):
+            return False
+        return has_path_separator or ext.lower() in _COMMON_SINGLE_SEGMENT_EXTENSIONS
     return False
 
 
-def parse_important_files(text: str | None) -> list[str]:
-    """Return de-duplicated file paths from structured checkpoint notes."""
+def parse_file_hints(text: str | None) -> list[str]:
+    """Return de-duplicated file paths from conservative text parsing."""
     if not text:
         return []
     results: list[str] = []
@@ -93,3 +105,8 @@ def parse_important_files(text: str | None) -> list[str]:
         add(candidate, allow_spaces=False)
 
     return results
+
+
+def parse_important_files(text: str | None) -> list[str]:
+    """Backward-compatible wrapper for checkpoint important_files parsing."""
+    return parse_file_hints(text)

@@ -35,6 +35,12 @@ copilot --version
 
 ### 5. Schema check (MUST exit 0)
 
+If you use a non-default local DB path, export it first:
+
+```bash
+export SESSION_RECALL_DB=/path/to/session-store.db
+```
+
 ```bash
 cd auto-memory && session-recall schema-check
 ```
@@ -57,7 +63,13 @@ session-recall list --json | python3 -c "import sys,json; d=json.load(sys.stdin)
 session-recall health --json | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'overall: {d[\"overall_score\"]}')"
 ```
 
-### 8. Log result
+### 8. Full setup verification
+
+```bash
+session-recall doctor
+```
+
+### 9. Log result
 
 Append to `~/.copilot/upgrade-log.md`:
 
@@ -66,6 +78,7 @@ Append to `~/.copilot/upgrade-log.md`:
 - schema-check: PASS/FAIL
 - list: PASS/FAIL
 - health: PASS/FAIL (score: N.N)
+- doctor: PASS/FAIL
 ```
 
 ## If schema drift detected

@@ -1,7 +1,6 @@
 """Tests for health/dim_disclosure.py — three-state tier, transitions, sample gates."""
 import json
 from datetime import datetime, timedelta, timezone
-import pytest
 from session_recall.health import dim_disclosure
 
 
@@ -31,6 +30,21 @@ def test_meta_entries_excluded(tmp_path, monkeypatch):
     r = dim_disclosure.check()
     assert r["meta_entries"] == 10
     assert r["scored_entries"] == 5
+
+
+def test_old_meta_only_entries_stay_calibrating(tmp_path, monkeypatch):
+    old_ts = (datetime.now(timezone.utc) - timedelta(days=8)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    entries = [{"cmd": "health", "tier": 0, "ts": old_ts}]
+    _write_entries(tmp_path, entries, monkeypatch)
+
+    analysis = dim_disclosure.analyze(entries)
+    result = dim_disclosure.check()
+
+    assert analysis["sample"]["sample_ready"] is False
+    assert "No scored telemetry yet" in analysis["next_step"]
+    assert result["zone"] == "CALIBRATING"
+    assert result["score"] is None
+    assert "No scored telemetry yet" in result["hint"]
 
 
 def test_insufficient_sample_returns_calibrating(tmp_path, monkeypatch):

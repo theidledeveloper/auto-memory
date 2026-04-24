@@ -1,71 +1,47 @@
 """List recent sessions for the current (or specified) repository."""
 import os
 import sys
+import time
 
 from ..config import DB_PATH
-from ..db.connect import connect_ro
-from ..db.schema_check import FILE_FALLBACK_SCHEMA, PATH_SCOPE_SCHEMA, schema_check
+from ..db.schema_check import FILE_FALLBACK_SCHEMA, schema_check
+from ..store.factory import open_store
+from ..store.protocol import StoreSchemaError
+from ..util import debug
 from ..util.file_activity import latest_activity_timestamp, latest_file_timestamp
 from ..util.file_hints import load_checkpoint_file_hints, load_turn_file_hints
 from ..util.format_output import output
 from ..util.resolve_scope import (
     file_scope_sql,
     resolve_scope,
-    session_scope_sql,
     time_filter_sql,
 )
-
-_QUERY_BASE = """
-    SELECT s.id, s.repository, s.branch, s.summary, s.created_at, s.updated_at,
-           (SELECT COUNT(*) FROM turns t WHERE t.session_id = s.id) as turns_count,
-           (SELECT COUNT(*) FROM session_files f WHERE f.session_id = s.id) as files_count
-    FROM sessions s"""
 _STALE_HOURS = 24
 
 
 def run(args) -> int:
     """Execute the list subcommand. Returns exit code."""
     scope = resolve_scope(args.repo)
-    conn = connect_ro(DB_PATH)
-    problems = schema_check(conn, PATH_SCOPE_SCHEMA if scope.mode == "path" else None)
-    if problems:
-        print("❌ Schema drift:", file=sys.stderr)
-        for p in problems:
-            print(f"   - {p}", file=sys.stderr)
-        conn.close()
-        return 2
+    debug.log(args, f"scope mode={scope.mode} display={scope.display}")
+    store = open_store(args, meta=getattr(args, "_telemetry", None), db_path=DB_PATH)
     limit = args.limit or 10
-    conditions = []
-    params = []
-    scope_clause, scope_params = session_scope_sql(scope)
-    if scope_clause:
-        conditions.append(scope_clause)
-        params.extend(scope_params)
-    days_clause, days_params = time_filter_sql("s.created_at", args.days, default_days=30)
-    if days_clause:
-        conditions.append(days_clause)
-        params.extend(days_params)
-    sql = _QUERY_BASE + " WHERE " + " AND ".join(conditions)
-    sql += " ORDER BY s.created_at DESC LIMIT ?"
-    params.append(limit)
-    rows = conn.execute(sql, tuple(params)).fetchall()
-    sessions = [
-        {
-            "id_short": r["id"][:8], "id_full": r["id"],
-            "repository": r["repository"], "branch": r["branch"],
-            "summary": r["summary"],
-            "date": r["created_at"][:10] if r["created_at"] else None,
-            "created_at": r["created_at"],
-            "turns_count": r["turns_count"], "files_count": r["files_count"],
-        }
-        for r in rows
-    ]
-    recent_files = _recent_files(conn, scope, days=args.days, limit=10)
-    data = {"repo": scope.display, "count": len(sessions),
-            "sessions": sessions, "recent_files": recent_files}
-    output(data, json_mode=args.json)
-    conn.close()
-    return 0
+    try:
+        t0 = time.monotonic()
+        sessions = store.list_sessions(scope, days=args.days, limit=limit)
+        recent_files, _, _warning = store.recent_files(scope, days=args.days, limit=10)
+        debug.log(args, f"session_rows={len(sessions)} ms={debug.elapsed_ms(t0):.1f}")
+        data = {"repo": scope.display, "count": len(sessions), "sessions": sessions, "recent_files": recent_files}
+        if getattr(args, "_telemetry", None) is not None:
+            args._telemetry["rows"] = len(sessions)
+        output(data, json_mode=args.json)
+        return 0
+    except StoreSchemaError as exc:
+        print("❌ Schema drift:", file=sys.stderr)
+        for problem in exc.problems:
+            print(f"   - {problem}", file=sys.stderr)
+        return 2
+    finally:
+        store.close()
 
 
 _FILES_SQL = """SELECT sf.file_path, sf.tool_name, sf.first_seen_at, sf.session_id
@@ -86,14 +62,14 @@ def _format_recent_file(row: dict, cwd: str) -> dict:
     }
 
 
-def _recent_files(conn, scope, days=None, limit=10):
+def _recent_files(conn, scope, days=None, limit=10, debug_args=None):
     conditions = []
     params = []
     scope_clause, scope_params = file_scope_sql(scope)
     if scope_clause:
         conditions.append(scope_clause)
         params.extend(scope_params)
-    days_clause, days_params = time_filter_sql("sf.first_seen_at", days, default_days=30)
+    days_clause, days_params = time_filter_sql("sf.first_seen_at", days)
     if days_clause:
         conditions.append(days_clause)
         params.extend(days_params)
@@ -122,4 +98,10 @@ def _recent_files(conn, scope, days=None, limit=10):
         latest_file is None or (latest_activity - latest_file).total_seconds() / 3600 > _STALE_HOURS
     )
     selected = fallback_files if fallback_files and (not primary_files or file_rows_stale) else primary_files
+    debug.log(
+        debug_args,
+        "recent_files "
+        f"primary={len(primary_files)} checkpoint={len(checkpoint_files)} turn={len(turn_files)} "
+        f"selected_source={'fallback' if selected is fallback_files else 'session_files'} stale={file_rows_stale}",
+    )
     return [_format_recent_file(row, cwd) for row in selected]

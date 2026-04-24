@@ -1,6 +1,6 @@
 # auto-memory — Copilot Instructions Template
 
-> **Note:** For installation, use [`deploy/install.md`](deploy/install.md) — it handles everything including appending this template automatically.
+> **Note:** Install package `auto-memory`. Run binary `session-recall`. For setup, prefer [`session-recall init`](deploy/install.md) over manual copy/paste.
 
 This file contains the raw instruction block for manual reference. Copy the block below into `~/.copilot/copilot-instructions.md` if you prefer manual setup.
 
@@ -23,7 +23,9 @@ session-recall health --json            # 10-dimension health check
 session-recall schema-check             # validate DB schema (run after Copilot CLI upgrade)
 ```
 
-**`--days N` works on all 4 query commands** (`list`, `files`, `checkpoints`, `search`) — filters to sessions/files/checkpoints from the last N days.
+**All 4 query commands default to all-time.** Add `--days N` when you want a bounded window, for example `--days 7` or `--days 30`.
+
+**Escape hatches:** `SESSION_RECALL_DB` overrides the session-store path. `SESSION_RECALL_TELEMETRY` overrides the local telemetry file path.
 
 Only use filesystem tools (grep, glob, find) if session-recall returns nothing useful.
 If `session-recall` errors, continue silently — it's a convenience, not a blocker.

@@ -10,6 +10,9 @@ EXPECTED_SCHEMA: dict[str, set[str]] = {
 
 PATH_SCOPE_SCHEMA: dict[str, set[str]] = {"sessions": {"cwd"}}
 FILE_FALLBACK_SCHEMA: dict[str, set[str]] = {"checkpoints": {"important_files"}}
+SEARCH_INDEX_SCHEMA: dict[str, set[str]] = {
+    "search_index": {"content", "session_id", "source_type", "source_id"}
+}
 FEATURE_SUPPORT_SCHEMA: dict[str, set[str]] = {
     "sessions": {"cwd"},
     "checkpoints": {"important_files"},

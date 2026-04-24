@@ -17,6 +17,19 @@ else
 fi
 
 echo ""
-echo "Installed. Verify with:"
-echo "  which session-recall"
+echo "Installed auto-memory. Run binary: session-recall"
+echo ""
+echo "Recommended next steps:"
+echo "  session-recall --version"
+echo "  session-recall init"
+echo "  session-recall doctor"
 echo "  session-recall schema-check"
+echo ""
+echo "Docs:"
+echo "  deploy/install.md"
+if [ -n "${SESSION_RECALL_DB:-}" ]; then
+    echo "Using SESSION_RECALL_DB override: $SESSION_RECALL_DB"
+fi
+if [ -n "${SESSION_RECALL_TELEMETRY:-}" ]; then
+    echo "Using SESSION_RECALL_TELEMETRY override: $SESSION_RECALL_TELEMETRY"
+fi

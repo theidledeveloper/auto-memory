@@ -2,7 +2,7 @@
 from unittest.mock import patch
 
 from session_recall.util.detect_repo import _parse_remote_url, detect_repo
-from session_recall.util.resolve_scope import Scope, resolve_scope, time_filter_sql
+from session_recall.util.resolve_scope import Scope, _path_prefix, resolve_scope, time_filter_sql
 
 
 def test_resolve_scope_prefers_detected_repo():
@@ -66,3 +66,14 @@ def test_time_filter_sql_zero_days_means_today():
 
     assert clause == "date(created_at) >= date('now')"
     assert params == ()
+
+
+def test_time_filter_sql_none_means_all_time():
+    clause, params = time_filter_sql("created_at", None)
+
+    assert clause == ""
+    assert params == ()
+
+
+def test_path_prefix_preserves_root_scope():
+    assert _path_prefix("/") == "/"

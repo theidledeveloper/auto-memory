@@ -19,6 +19,8 @@ def _normalize_path(path: str) -> str:
 
 
 def _path_prefix(path: str) -> str:
+    if path == os.sep:
+        return path
     return f"{path}{os.sep}"
 
 
@@ -102,13 +104,10 @@ def file_scope_sql(
 def time_filter_sql(
     column: str,
     days: int | None,
-    *,
-    default_days: int | None = None,
 ) -> tuple[str, tuple[str, ...]]:
     """Return a time-window filter for commands that accept --days."""
-    effective_days = default_days if days is None else days
-    if effective_days is None:
+    if days is None:
         return "", ()
-    if effective_days == 0:
+    if days == 0:
         return f"date({column}) >= date('now')", ()
-    return f"{column} >= datetime('now', ?)", (f"-{effective_days} days",)
+    return f"{column} >= datetime('now', ?)", (f"-{days} days",)

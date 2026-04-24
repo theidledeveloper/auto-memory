@@ -1,6 +1,19 @@
 # Deploy auto-memory
 
-auto-memory is a zero-dependency Python CLI that queries `~/.copilot/session-store.db` for progressive session recall. Install it once, wire it into Copilot CLI instructions, and every future agent session starts with full context.
+auto-memory is a zero-dependency Python CLI that reads local agent history for progressive session recall. Today that means full support for GitHub Copilot CLI plus a Claude Code adapter for `list`, `show`, `export`, and `diff`.
+
+Install package **`auto-memory`**. Run binary **`session-recall`**.
+
+Published-package fast paths:
+
+```bash
+uv tool install auto-memory
+pipx install auto-memory
+python3 -m pip install --user auto-memory
+uvx --from auto-memory session-recall --version
+```
+
+Use the editable flow below when you are validating the repo checkout itself.
 
 ## Prerequisites
 
@@ -49,33 +62,47 @@ python3 -m pip install --user --force-reinstall -e .
 
 ### Step 3 — Verify install
 
-Run both commands. Both must succeed.
+Run these commands after install:
 
 ```bash
-which session-recall
+session-recall --version
 session-recall schema-check
 ```
 
-If `which session-recall` returns nothing, see Troubleshooting below.
+`schema-check` is the hard install gate. `health` is optional and diagnostic.
+
+## Optional Claude Code source
+
+Claude Code support is read-only and uses transcript files under `~/.claude/projects/`. If you relocate the Claude root, session-recall follows `CLAUDE_CONFIG_DIR`.
+
+```bash
+SESSION_RECALL_SOURCE=claude session-recall list --json --repo all
+session-recall show --source claude <session-id> --json
+session-recall export --source claude <session-id> --format md
+```
+
+Current Claude boundary:
+
+- supported: `list`, `show`, `export`, `diff`
+- still Copilot-only: `files`, `checkpoints`, `context`, `search`, `stats`, `health`, `calibrate`, `schema-check`, `doctor`
+- still deferred: Cursor adapter, optional MCP wrapper
 
 ## Agent Integration — Add to Copilot Instructions
 
-This step wires auto-memory into every future agent session by appending instructions to `~/.copilot/copilot-instructions.md`.
+This step wires auto-memory into every future agent session by updating `~/.copilot/copilot-instructions.md`.
 
-### Step 1 — Ensure the file exists
+### Preferred — let session-recall do it
 
 ```bash
-mkdir -p ~/.copilot
-touch ~/.copilot/copilot-instructions.md
+session-recall init
+session-recall doctor
 ```
 
-### Step 2 — Check for duplicates
+`doctor` verifies the active DB path, schema, and instruction-file wiring. Fresh installs with zero sessions are still OK.
 
-Search `~/.copilot/copilot-instructions.md` for the string `Progressive Session Recall`. If it already exists, **skip Step 3 entirely** — the block is already present.
+### Manual fallback — copy the block yourself
 
-### Step 3 — Append the instruction block
-
-Append this exact block to the end of `~/.copilot/copilot-instructions.md`:
+If you prefer manual setup, copy the block below into `~/.copilot/copilot-instructions.md`.
 
 ````markdown
 ## Progressive Session Recall — RUN FIRST ON EVERY PROMPT
@@ -87,6 +114,7 @@ session-recall files --json --limit 10  # recently touched files
 session-recall files --days 7 --json    # files touched in last 7 days
 session-recall list --json --limit 5    # recent sessions
 session-recall list --days 2 --json     # sessions from last 2 days
+session-recall context --budget 400 --json  # approximate one-shot bundle
 session-recall search '<term>' --json   # full-text search
 session-recall search '<term>' --days 5 # search last 5 days only
 session-recall checkpoints --days 3     # checkpoints from last 3 days
@@ -95,7 +123,11 @@ session-recall health --json            # 10-dimension health check
 session-recall schema-check             # validate DB schema (run after Copilot CLI upgrade)
 ```
 
-**`--days N` works on all 4 query commands** (`list`, `files`, `checkpoints`, `search`) — filters to sessions/files/checkpoints from the last N days.
+**All 4 query commands default to all-time.** Add `--days N` when you want a bounded window, for example `--days 7` or `--days 30`.
+
+`session-recall context --budget` is approximate and experimental. It uses a documented 4-chars-per-token heuristic, not a tokenizer or runtime dependency.
+
+**Escape hatches:** `SESSION_RECALL_DB` overrides the session-store path. `SESSION_RECALL_TELEMETRY` overrides the local telemetry file path.
 
 Only use filesystem tools (grep, glob, find) if session-recall returns nothing useful.
 If `session-recall` errors, continue silently — it's a convenience, not a blocker.
@@ -103,12 +135,12 @@ If `session-recall` errors, continue silently — it's a convenience, not a bloc
 
 ## Verify Installation
 
-Run all three checks. `list` and `schema-check` should pass, and `health` should show the core storage/query dimensions as healthy.
+Run these checks after wiring:
 
 ```bash
-session-recall health          # core DB/schema/query checks should be GREEN
-session-recall list --json     # should return at least one session
+session-recall doctor
 session-recall schema-check    # must exit 0
+session-recall list --json     # may return zero sessions on a fresh install
 ```
 
 If `session-recall list --json` returns zero sessions, that is normal on a fresh install — Copilot CLI needs at least one completed session first.
@@ -119,6 +151,23 @@ It is normal for `session-recall health` to show:
 
 - `File Row Freshness = AMBER` when Copilot omitted native `session_files` rows but session-recall can still recover files from checkpoint or turn fallback.
 - `Progressive Disclosure = CALIBRATING` on a fresh install until enough telemetry accumulates.
+
+## Migration note
+
+`session-recall list` now defaults to **all history**. If you want the old bounded behavior, pass `--days 30` explicitly in your scripts and prompts.
+
+## Environment overrides
+
+Use these when CI, tests, or a non-default local setup need different paths:
+
+```bash
+SESSION_RECALL_DB=/tmp/session-store.db session-recall doctor
+SESSION_RECALL_TELEMETRY=/tmp/session-recall-stats.json session-recall doctor
+SESSION_RECALL_SOURCE=claude session-recall list --json --repo all
+CLAUDE_CONFIG_DIR=/tmp/.claude SESSION_RECALL_SOURCE=claude session-recall show <session-id> --json
+```
+
+Homebrew support is intentionally deferred until maintainers explicitly commit to owning a tap or formula.
 
 ## Troubleshooting
 
@@ -134,7 +183,7 @@ If missing, add it and retry:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
-which session-recall
+session-recall --version
 ```
 
 If still not found, re-run install with `uv tool install --force --editable .` from the repo root.
@@ -147,12 +196,23 @@ The Copilot CLI DB schema has drifted from what session-recall expects. This usu
 
 Normal on first use. Copilot CLI needs at least one completed session before session-recall has anything to query. Run a Copilot CLI session, then retry.
 
+### Using a non-default DB or telemetry path
+
+If your setup does not use the default Copilot location, set the override explicitly before running checks:
+
+```bash
+export SESSION_RECALL_DB=/path/to/session-store.db
+export SESSION_RECALL_TELEMETRY=/path/to/.session-recall-stats.json
+session-recall doctor
+```
+
 ## Upgrading Copilot CLI
 
 After any Copilot CLI upgrade, run:
 
 ```bash
 session-recall schema-check
+session-recall doctor
 ```
 
 If it exits 0, no action needed. If it fails, follow the full upgrade procedure in [UPGRADE-COPILOT-CLI.md](../UPGRADE-COPILOT-CLI.md).

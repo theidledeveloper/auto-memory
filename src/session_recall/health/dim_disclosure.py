@@ -43,6 +43,76 @@ def _parse_ts(ts: str) -> datetime | None:
         return None
 
 
+def analyze(entries: list[dict] | None = None) -> dict:
+    entries = list(entries or _load_entries())
+    total = len(entries)
+    unknown_count = sum(1 for e in entries if "tier" not in e)
+    meta_count = sum(1 for e in entries if e.get("tier") == 0)
+    scored = [e for e in entries if e.get("tier") in (1, 2, 3)]
+    scored_n = len(scored)
+    parsed = [_parse_ts(e.get("ts", "")) for e in entries]
+    parsed = [ts for ts in parsed if ts is not None]
+    first_ts = min(parsed) if parsed else None
+    age_days = ((datetime.now(timezone.utc).replace(tzinfo=None) - first_ts).days if first_ts else 0)
+
+    tiers = [e["tier"] for e in scored]
+    transitions = _classify_transitions(scored) if scored else {
+        "healthy": 0,
+        "neutral": 0,
+        "suspicious": 0,
+        "repetition": 0,
+    }
+    esc_rate = _escalation_rate(transitions)
+    avg = statistics.mean(tiers) if tiers else 0.0
+    sigma = statistics.pstdev(tiers) if len(tiers) > 1 else 0.0
+    t1 = sum(1 for t in tiers if t == 1)
+    t2 = sum(1 for t in tiers if t == 2)
+    t3 = sum(1 for t in tiers if t == 3)
+    sample_ready = scored_n > 0 and not (
+        scored_n < MIN_SAMPLE_SIZE and age_days < MIN_SAMPLE_DAYS
+    )
+    return {
+        "sample": {
+            "total_entries": total,
+            "unknown_entries": unknown_count,
+            "meta_entries": meta_count,
+            "scored_entries": scored_n,
+            "age_days": age_days,
+            "sample_ready": sample_ready,
+        },
+        "distribution": {
+            "tier1": t1,
+            "tier2": t2,
+            "tier3": t3,
+            "tier1_pct": round((t1 / scored_n) * 100, 1) if scored_n else 0.0,
+            "tier2_pct": round((t2 / scored_n) * 100, 1) if scored_n else 0.0,
+            "tier3_pct": round((t3 / scored_n) * 100, 1) if scored_n else 0.0,
+            "avg_tier": round(avg, 2),
+            "sigma": round(sigma, 2),
+            "escalation_rate_pct": round((esc_rate or 0.0) * 100, 1),
+        },
+        "transitions": transitions,
+        "recommendation": {
+            "green_avg_low": round(max(1.0, avg - sigma), 2) if tiers else GREEN_AVG_LOW,
+            "green_avg_high": round(min(3.0, avg + sigma), 2) if tiers else GREEN_AVG_HIGH,
+            "amber_avg_low": round(max(1.0, avg - (2 * sigma)), 2) if tiers else AMBER_AVG_LOW,
+            "amber_avg_high": round(min(3.0, avg + (2 * sigma)), 2) if tiers else AMBER_AVG_HIGH,
+            "t3_policy_floor": T3_POLICY_FLOOR,
+            "scoring_active": SCORING_ACTIVE,
+        },
+        "readiness": (
+            "ready for operator review"
+            if sample_ready
+            else f"collect more data ({scored_n}/{MIN_SAMPLE_SIZE} scored entries, {age_days}/{MIN_SAMPLE_DAYS} days)"
+        ),
+        "next_step": (
+            "Review thresholds, hand-edit dim_disclosure.py, then flip SCORING_ACTIVE=True when comfortable."
+            if tiers
+            else "No scored telemetry yet. Run session-recall commands that hit tiers 1-3 first."
+        ),
+    }
+
+
 def _classify_transitions(scored: list[dict]) -> dict:
     """Returns {healthy, neutral, suspicious, repetition} counts over adjacent pairs."""
     healthy = neutral = suspicious = repetition = 0
@@ -92,6 +162,7 @@ def _escalation_rate(t: dict) -> float | None:
 
 def check() -> dict:
     entries = _load_entries()
+    analysis = analyze(entries)
     total = len(entries)
     unknown_count = sum(1 for e in entries if "tier" not in e)
     meta_count = sum(1 for e in entries if e.get("tier") == 0)
@@ -110,8 +181,11 @@ def check() -> dict:
                 "hint": "mixed-schema telemetry — waiting for legacy entries to drain"}
 
     # Guard 2: insufficient sample
-    first_ts = next((_parse_ts(e["ts"]) for e in entries if _parse_ts(e.get("ts", ""))), None)
-    age_days = ((datetime.now(timezone.utc).replace(tzinfo=None) - first_ts).days if first_ts else 0)
+    age_days = analysis["sample"]["age_days"]
+    if scored_n == 0:
+        return {**base, "score": None, "zone": "CALIBRATING",
+                "detail": f"0/{MIN_SAMPLE_SIZE} non-meta entries, {age_days}d since first",
+                "hint": "No scored telemetry yet. Run session-recall commands that hit tiers 1-3 first."}
     if scored_n < MIN_SAMPLE_SIZE and age_days < MIN_SAMPLE_DAYS:
         return {**base, "score": None, "zone": "CALIBRATING",
                 "detail": f"{scored_n}/{MIN_SAMPLE_SIZE} non-meta entries, {age_days}d since first",
@@ -123,7 +197,7 @@ def check() -> dict:
     t2 = sum(1 for t in tiers if t == 2) / scored_n
     t3 = sum(1 for t in tiers if t == 3) / scored_n
     avg = statistics.mean(tiers)
-    transitions = _classify_transitions(scored)
+    transitions = analysis["transitions"]
     esc_rate = _escalation_rate(transitions)
 
     detail = (f"T1={t1:.0%} T2={t2:.0%} T3={t3:.0%} avg={avg:.2f} "
@@ -134,21 +208,28 @@ def check() -> dict:
     if not SCORING_ACTIVE:
         return {**base, "score": None, "zone": "CALIBRATING",
                 "detail": detail,
-                "hint": "Baseline collected. Run `session-recall calibrate --analyze`, then hand-edit thresholds + flip SCORING_ACTIVE=True."}
+                "hint": "Baseline collected. Run `session-recall calibrate --analyze`, then hand-edit thresholds + flip SCORING_ACTIVE=True.",
+                "transitions": transitions}
 
     # Stage 2 scoring (only reached after operator activates)
     if t3 > T3_POLICY_FLOOR:
         zone, score = "RED", 2.0
         hint = f"T3={t3:.0%} > policy floor {T3_POLICY_FLOOR:.0%} — agent skipping ladder"
+        if transitions["suspicious"] > transitions["healthy"]:
+            hint += "; too many direct deep dives"
     elif GREEN_AVG_LOW <= avg <= GREEN_AVG_HIGH:
         zone, score = "GREEN", 8.0
-        hint = ""
+        hint = "Mostly staying in cheap tiers before deep recall." if transitions["healthy"] else ""
     elif AMBER_AVG_LOW <= avg <= AMBER_AVG_HIGH:
         zone, score = "AMBER", 5.0
         hint = f"avg_tier={avg:.2f} outside 1σ band"
+        if transitions["repetition"] >= 2:
+            hint += "; repeated search patterns suggest narrowing queries sooner"
     else:
         zone, score = "RED", 2.0
         hint = f"avg_tier={avg:.2f} outside 2σ band"
+        if transitions["suspicious"] > transitions["healthy"]:
+            hint += "; start with list/files before show"
 
     return {**base, "score": score, "zone": zone, "detail": detail, "hint": hint,
             "transitions": transitions}

@@ -1,9 +1,12 @@
 """Full-text search across session turns and summaries."""
 import re
 import sys
+import time
 from ..db.connect import connect_ro
-from ..db.schema_check import PATH_SCOPE_SCHEMA, schema_check
+from ..db.schema_check import PATH_SCOPE_SCHEMA, SEARCH_INDEX_SCHEMA, schema_check
 from ..config import DB_PATH
+from ..util import debug
+from ..util import telemetry
 from ..util.format_output import output
 from ..util.resolve_scope import (
     file_scope_sql,
@@ -52,7 +55,10 @@ def sanitize_fts5_query(raw: str) -> str | None:
 
 
 def run(args) -> int:
-    conn = connect_ro(DB_PATH)
+    query_len = len((args.query or "").strip())
+    query_fingerprint = telemetry.query_hash(args.query or "") if query_len else "none"
+    debug.log(args, f"query_len={query_len} query_hash={query_fingerprint}")
+    conn = connect_ro(DB_PATH, meta=getattr(args, "_telemetry", None))
     problems = schema_check(conn)
     if problems:
         for p in problems:
@@ -61,7 +67,14 @@ def run(args) -> int:
         return 2
     raw_query = args.query
     scope = resolve_scope(getattr(args, 'repo', None))
+    debug.log(args, f"scope mode={scope.mode} display={scope.display}")
     problems = schema_check(conn, PATH_SCOPE_SCHEMA if scope.mode == "path" else None)
+    if problems:
+        for p in problems:
+            print(f"   - {p}", file=sys.stderr)
+        conn.close()
+        return 2
+    problems = schema_check(conn, SEARCH_INDEX_SCHEMA)
     if problems:
         for p in problems:
             print(f"   - {p}", file=sys.stderr)
@@ -71,6 +84,7 @@ def run(args) -> int:
     days = getattr(args, 'days', None)
 
     fts_query = sanitize_fts5_query(raw_query)
+    debug.log(args, f"fts_ready={fts_query is not None}")
     if fts_query is None:
         data = {"query": raw_query, "repo": scope.display, "count": 0, "results": [],
                 "warning": "Empty query — nothing to search"}
@@ -90,6 +104,7 @@ def run(args) -> int:
         params.extend(days_params)
     extra_filters = "".join(f" AND {condition}" for condition in conditions)
     sql = _SQL.format(extra_filters=extra_filters)
+    t0 = time.monotonic()
     rows = conn.execute(sql, (fts_query, *params, limit)).fetchall()
     results = [{"session_id": r["session_id"][:8], "session_id_full": r["session_id"],
                 "source_type": r["source_type"], "summary": r["summary"],
@@ -120,7 +135,13 @@ def run(args) -> int:
                          "date": (r["created_at"] or "")[:10],
                          "excerpt": f"{r['file_path']} ({r['tool_name']})"})
     results = results[:limit]
+    debug.log(
+        args,
+        f"fts_rows={len(rows)} file_rows={len(frows)} final_rows={len(results)} ms={debug.elapsed_ms(t0):.1f}",
+    )
     data = {"query": raw_query, "repo": scope.display, "count": len(results), "results": results}
+    if getattr(args, "_telemetry", None) is not None:
+        args._telemetry["rows"] = len(results)
     output(data, json_mode=getattr(args, 'json', False))
     conn.close()
     return 0

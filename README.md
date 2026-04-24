@@ -11,23 +11,47 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org)
 [![Zero Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)](pyproject.toml)
-[![Tests](https://img.shields.io/badge/tests-90%20passed-brightgreen)]()
 
-**Zero-dependency CLI that turns Copilot CLI's local SQLite into instant recall — no MCP server, no hooks, read-only, schema-checked. ~50 tokens per prompt.**
+**Zero-dependency CLI that turns local agent history into instant recall — no MCP server, no hooks, read-only, schema-checked. ~50 tokens per prompt.**
 
-**Works with:** GitHub Copilot CLI  
-**Coming soon:** Claude Code · Cursor · Codex 
+**Works with:** GitHub Copilot CLI, Claude Code (list/show/export/diff)
+**Still deferred:** Cursor · Codex-style local stores · optional MCP wrapper
 
 ---
 
 ### Quickstart
 
+Install package **`auto-memory`**. Run binary **`session-recall`**.
+
 ```bash
-pip install auto-memory        # or: git clone + ./install.sh
-session-recall health          # verify it works
+pip install auto-memory        # or: uv tool install auto-memory
+# or: pipx install auto-memory
+session-recall init
+session-recall doctor
+```
+
+Hard install gate: `session-recall schema-check`.
+
+`session-recall health` is optional and diagnostic. On a fresh install it may still show calibrating or sparse-history signals.
+
+Fast no-install probe:
+
+```bash
+uvx --from auto-memory session-recall --version
+```
+
+Claude Code quick probe:
+
+```bash
+SESSION_RECALL_SOURCE=claude session-recall list --json --repo all
+session-recall show --source claude <session-id> --json
 ```
 
 Now give your agent a memory. Point it at [`deploy/install.md`](deploy/install.md) and let it cook. 🍳
+
+### Migration note
+
+`session-recall list` now defaults to **all history**. If you want the old bounded behavior, pass `--days 30` explicitly.
 
 ---
 
@@ -63,7 +87,7 @@ Here's the cost comparison that made me build this:
 | `grep -r "auth" src/` | ~5,000-10,000 | 500 results, mostly irrelevant |
 | `find . -name "*.py"` | ~2,000 | Every Python file, no context |
 | Agent re-orientation | ~2,000 | You re-explaining yesterday |
-| **`auto-memory files --json --limit 10`** | **~50** | **Exactly the 10 files you touched yesterday** |
+| **`session-recall files --json --limit 10`** | **~50** | **Exactly the 10 files you touched yesterday** |
 
 **50 tokens vs 10,000 — a 200x improvement.**
 
@@ -95,11 +119,11 @@ Total: ~16K tokens burned, 8 minutes elapsed, agent still isn't oriented.
 ```
 You: Fix the failing test in the auth module
 
-Agent: [auto-recall: auto-memory files --json --limit 10]
+Agent: [auto-recall: session-recall files --json --limit 10]
        → src/auth/refresh.py, tests/test_refresh_edge_cases.py,
          src/auth/token_store.py (last touched 14h ago)
 
-       [auto-recall: auto-memory list --json --limit 3]
+       [auto-recall: session-recall list --json --limit 3]
        → Yesterday: "Fixed token refresh race condition, one edge case
          test still failing on expired token + network timeout combo"
 
@@ -134,26 +158,27 @@ auto-memory is the **page fault handler** — it pulls exact facts from disk in 
 ```
 ┌─────────────────────────────────────────────────┐
 │  copilot-instructions.md                        │
-│  "Run auto-memory FIRST on every prompt"         │
+│  "Run session-recall FIRST on every prompt"      │
 └──────────────────┬──────────────────────────────┘
                    │ agent reads instruction
                    ▼
 ┌─────────────────────────────────────────────────┐
-│  auto-memory CLI                                │
-│  (pure Python, zero deps, read-only)            │
+│  session-recall CLI                             │
+│  (package: auto-memory, zero deps, read-only)   │
 └──────────────────┬──────────────────────────────┘
-                   │ SELECT ... FROM sessions
+                   │ selected backend
                    ▼
-┌─────────────────────────────────────────────────┐
-│  ~/.copilot/session-store.db                    │
-│  (SQLite + FTS5, owned by Copilot CLI binary)   │
-└─────────────────────────────────────────────────┘
+┌──────────────────────────┐   ┌──────────────────┐
+│ ~/.copilot/session-     │   │ ~/.claude/       │
+│ store.db                │   │ projects/**/*.   │
+│ (SQLite + FTS5)         │   │ jsonl            │
+└──────────────────────────┘   └──────────────────┘
 ```
 
 - **Zero dependencies** — stdlib only (sqlite3, json, argparse)
-- **Read-only** — never writes to `~/.copilot/session-store.db`
+- **Read-only** — never writes to Copilot or Claude history stores
 - **WAL-safe** — exponential backoff retry on SQLITE_BUSY (50→150→450ms)
-- **Schema-aware** — validates expected schema on every call, fails fast on drift
+- **Schema-aware where needed** — validates Copilot's expected schema on every SQLite-backed call, fails fast on drift
 - **Telemetry** — ring buffer of last 100 invocations for concurrency monitoring
 
 ## Usage
@@ -173,6 +198,8 @@ auto-memory is the **page fault handler** — it pulls exact facts from disk in 
 
 No special syntax. The agent reads your session history and gets oriented in seconds instead of minutes.
 
+Want a structured before/after test pack? See [EVAL-PROMPTS.md](EVAL-PROMPTS.md).
+
 ### How it works under the hood
 
 Progressive disclosure — most prompts never get past Tier 1.
@@ -182,6 +209,7 @@ Progressive disclosure — most prompts never get past Tier 1.
 ```bash
 session-recall files --json --limit 10
 session-recall list --json --limit 5
+session-recall list --source claude --json --repo all
 ```
 
 `session-recall files` falls back to checkpoint-derived file hints and then turn-derived file hints when `session_files` is stale or missing, and marks fallback results with source metadata and warning text.
@@ -196,14 +224,76 @@ session-recall search "specific term" --json
 
 ```bash
 session-recall show <session-id> --json
+session-recall show --source claude <session-id> --json
 ```
+
+**Portable artifacts and quick comparisons.**
+
+```bash
+session-recall export <session-id> --format md > handoff.md
+session-recall diff <session-a> <session-b> --json
+session-recall export --source claude <session-id> --format md > claude-handoff.md
+```
+
+`session-recall export` prints a compact markdown handoff with summary, files, checkpoints, refs, and selected turns. `session-recall diff` compares summary, files, and checkpoint metadata first, and keeps turn diffs out of the first version so agents can consume the output cheaply. On Claude source today, `diff` is honest about its current limit and compares summary only until file/checkpoint equivalents are proven.
+
+**Approximate one-shot recall bundle (experimental).**
+
+```bash
+session-recall context --budget 400
+session-recall context --budget 400 --json
+```
+
+`session-recall context` keeps the primitive commands intact under the hood, fills the bundle in this order, files first, then session summaries, then checkpoints, and uses a documented 4-chars-per-token heuristic instead of a tokenizer dependency.
 
 **Operational commands:**
 
 ```bash
 session-recall health          # 10-dimension health dashboard
+session-recall stats           # telemetry + session-store usage summary
+session-recall calibrate --analyze
 session-recall schema-check    # validate feature-support schema after Copilot CLI upgrades
 ```
+
+JSON output is the public integration surface for scripts and agents. Add `--json` whenever another tool will consume the output.
+
+Use `session-recall --debug ...` when scope resolution, fallback selection, or query behavior is unclear. Debug output stays on stderr so JSON/stdout contracts stay script-safe.
+
+### Source selection and support boundary
+
+Use `--source claude` or `SESSION_RECALL_SOURCE=claude` to read Claude Code transcripts from `~/.claude/projects/` or `CLAUDE_CONFIG_DIR/projects/`.
+
+| Source | Backing store | Supported commands |
+|--------|---------------|--------------------|
+| `copilot` | `~/.copilot/session-store.db` or `SESSION_RECALL_DB` | full current CLI surface |
+| `claude` | `~/.claude/projects/**/*.jsonl` or `CLAUDE_CONFIG_DIR/projects/**/*.jsonl` | `list`, `show`, `export`, `diff` |
+
+Current non-goals:
+
+- Cursor support is still deferred until transcript files and IDE state boundaries are proven.
+- Claude `files`, `checkpoints`, `context`, `search`, `stats`, `health`, and `calibrate` stay on the Copilot path for now.
+- MCP stays outside the zero-dependency core package.
+
+### JSON integration surface
+
+Treat `--json` output as stable input for scripts, shells, and agents.
+
+```bash
+session-recall files --json --limit 5 | jq -r '.files[].file_path'
+session-recall context --budget 400 --json | jq -r '.text'
+session-recall search "auth refresh" --json > recall.json
+```
+
+Escape hatches are also part of that public surface:
+
+```bash
+SESSION_RECALL_DB=/tmp/session-store.db session-recall list --json
+SESSION_RECALL_TELEMETRY=/tmp/session-recall-stats.json session-recall stats --json
+SESSION_RECALL_SOURCE=claude session-recall show <session-id> --json
+CLAUDE_CONFIG_DIR=/tmp/.claude SESSION_RECALL_SOURCE=claude session-recall list --json --repo all
+```
+
+Homebrew remains future work for now. No tap is shipped until maintainers explicitly opt into owning it.
 
 ## Health Check
 
@@ -226,6 +316,8 @@ Dim Name                   Zone     Score  Detail
 
 `Progressive Disclosure` starting in `CALIBRATING` is also normal on a fresh install. That score only activates after enough telemetry accumulates.
 
+Once telemetry has enough history, run `session-recall calibrate --analyze` to get operator-facing threshold recommendations for `health/dim_disclosure.py`. The command does not auto-write thresholds or pretend to measure real tokens. It only analyzes observed tier usage and prints recommendations for review.
+
 ## Agent Integration
 
 auto-memory works with **any agent that supports instruction files** — GitHub Copilot CLI, Claude Code, Cursor, Aider, Windsurf, and more. Installation wires session-recall into your agent's instruction file so it runs context recall automatically.
@@ -247,6 +339,20 @@ No. auto-memory is strictly read-only. It never writes to `~/.copilot/session-st
 
 **What happens when Copilot CLI updates its schema?**
 Run `session-recall schema-check` to validate the feature-support schema. The tool fails fast on schema drift rather than returning bad data. See [UPGRADE-COPILOT-CLI.md](UPGRADE-COPILOT-CLI.md).
+
+## Environment overrides
+
+Use these when CI, tests, or local setup need non-default paths:
+
+- `SESSION_RECALL_DB=/path/to/session-store.db`
+- `SESSION_RECALL_TELEMETRY=/path/to/.session-recall-stats.json`
+
+Examples:
+
+```bash
+SESSION_RECALL_DB=/tmp/session-store.db session-recall doctor
+SESSION_RECALL_TELEMETRY=/tmp/session-recall-stats.json session-recall doctor --json
+```
 
 ## Roadmap
 

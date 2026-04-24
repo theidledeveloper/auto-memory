@@ -30,9 +30,9 @@ def test_strips_c0_controls():
     assert sanitize_for_terminal('a\x00b\x07c\x08d\x7f') == 'abcd'
 
 
-def test_preserves_tab_newline_cr():
-    """TAB, LF, CR are legitimate whitespace — must survive."""
-    assert sanitize_for_terminal('a\tb\nc\rd') == 'a\tb\nc\rd'
+def test_preserves_tab_newline_and_strips_carriage_return():
+    """TAB/LF survive, CR is removed to block terminal line-overwrite tricks."""
+    assert sanitize_for_terminal('a\tb\nc\rd') == 'a\tb\ncd'
 
 
 def test_handles_none():

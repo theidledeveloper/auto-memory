@@ -7,6 +7,7 @@ from session_recall.db.schema_check import (
     FILE_FALLBACK_SCHEMA,
     PATH_SCOPE_SCHEMA,
     EXPECTED_SCHEMA,
+    SEARCH_INDEX_SCHEMA,
     schema_check,
 )
 
@@ -91,6 +92,20 @@ def test_feature_support_schema_requires_cwd_and_important_files():
         problems = schema_check(conn, FEATURE_SUPPORT_SCHEMA)
         assert any("cwd" in problem for problem in problems)
         assert any("important_files" in problem for problem in problems)
+        conn.close()
+    finally:
+        os.unlink(path)
+
+
+def test_search_index_schema_required_for_search_surface():
+    """Search depends on the FTS index being present and shaped correctly."""
+    tables = {t: list(cols) for t, cols in EXPECTED_SCHEMA.items() if cols}
+    path = _create_db(tables)
+    try:
+        conn = sqlite3.connect(path)
+        conn.row_factory = sqlite3.Row
+        problems = schema_check(conn, SEARCH_INDEX_SCHEMA)
+        assert any("MISSING TABLE: search_index" in p for p in problems)
         conn.close()
     finally:
         os.unlink(path)

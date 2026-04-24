@@ -107,13 +107,15 @@ def test_list_days_30_excludes_60d(db_path):
     assert len(ids) == 3
 
 
-def test_list_days_default_30(db_path):
-    """days=None should use default 30 days (excludes 60d old)."""
+def test_list_no_days_returns_all(db_path):
+    """days=None should use the all-time default across query commands."""
     from session_recall.commands.list_sessions import run
     args = SimpleNamespace(repo=None, limit=100, days=None, json=True)
     code, out = _run_cmd("session_recall.commands.list_sessions", run, args, db_path)
     ids = {s["id_full"] for s in out["sessions"]}
-    assert "s_60d" not in ids
+    assert code == 0
+    assert ids == {"s_now", "s_3d", "s_10d", "s_60d"}
+    assert out["count"] == 4
 
 
 # -------- FILES --------

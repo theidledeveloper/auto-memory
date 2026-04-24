@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import sys
+import time
 
 from ..db.connect import connect_ro
 from ..db.schema_check import FILE_FALLBACK_SCHEMA, PATH_SCOPE_SCHEMA, schema_check
 from ..config import DB_PATH
+from ..util import debug
 from ..util.file_activity import format_gap, latest_activity_timestamp, latest_file_timestamp
 from ..util.file_hints import load_checkpoint_file_hints, load_turn_file_hints
 from ..util.format_output import output
@@ -54,7 +56,8 @@ def _warning_for_fallback(latest_file, latest_activity, fallback_label: str) -> 
 
 def run(args) -> int:
     scope = resolve_scope(getattr(args, 'repo', None))
-    conn = connect_ro(DB_PATH)
+    debug.log(args, f"scope mode={scope.mode} display={scope.display}")
+    conn = connect_ro(DB_PATH, meta=getattr(args, "_telemetry", None))
     problems = schema_check(conn, PATH_SCOPE_SCHEMA if scope.mode == "path" else None)
     if problems:
         for p in problems:
@@ -64,6 +67,7 @@ def run(args) -> int:
     limit = getattr(args, 'limit', None) or 10
     days = getattr(args, 'days', None)
     checkpoint_fallback_supported = not schema_check(conn, FILE_FALLBACK_SCHEMA)
+    t0 = time.monotonic()
     primary_files = _load_primary_files(conn, scope, days, limit)
     checkpoint_files = (
         load_checkpoint_file_hints(conn, scope, days, limit)
@@ -82,12 +86,21 @@ def run(args) -> int:
 
     use_fallback = bool(fallback_files) and (not primary_files or file_rows_stale)
     files = fallback_files if use_fallback else primary_files
+    debug.log(
+        args,
+        "rows="
+        f"{len(files)} primary={len(primary_files)} checkpoint={len(checkpoint_files)} turn={len(turn_files)} "
+        f"selected_source={fallback_source if use_fallback else 'session_files'} "
+        f"stale={file_rows_stale} ms={debug.elapsed_ms(t0):.1f}",
+    )
     data = {
         "repo": scope.display,
         "count": len(files),
         "files": files,
         "source": fallback_source if use_fallback else "session_files",
     }
+    if getattr(args, "_telemetry", None) is not None:
+        args._telemetry["rows"] = len(files)
     if use_fallback:
         data["warning"] = _warning_for_fallback(latest_file, latest_activity, fallback_label)
     elif file_rows_stale:
